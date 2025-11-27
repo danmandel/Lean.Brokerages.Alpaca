@@ -845,6 +845,11 @@ namespace QuantConnect.Brokerages.Alpaca
         /// </summary>
         private static void ValidateSubscription()
         {
+            // Patched for standalone local execution:
+            // Skip QuantConnect cloud API validation since we're running locally
+            // with direct Alpaca API connection only
+            return;
+
             try
             {
                 var productId = 347;
