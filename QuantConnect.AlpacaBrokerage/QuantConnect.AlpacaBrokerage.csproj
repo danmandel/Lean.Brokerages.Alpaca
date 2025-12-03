@@ -33,7 +33,7 @@
 		<PackageReference Include="MessagePack" Version="3.1.4" />
 		<PackageReference Include="System.Threading.Channels" Version="9.0.8" PrivateAssets="compile;contentfiles;build;analyzers" />
 		<PackageReference Include="System.IO.Pipelines" Version="9.0.8" PrivateAssets="compile;contentfiles;build;analyzers" />
-		<PackageReference Include="ably.io" Version="1.2.20" />
+		<PackageReference Include="ably.io" Version="1.2.18" />
 	</ItemGroup>
 
 	<!-- Reference local LEAN Brokerages project instead of NuGet package.
