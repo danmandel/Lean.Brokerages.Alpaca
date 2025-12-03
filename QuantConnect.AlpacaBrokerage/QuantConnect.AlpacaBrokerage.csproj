@@ -28,12 +28,20 @@
 	</ItemGroup>
 	<ItemGroup>
 		<PackageReference Include="Newtonsoft.Json" Version="13.0.2" />
-		<PackageReference Include="QuantConnect.Brokerages" Version="2.5.*" />
 		<!--Dependencies of Alpaca.Markets.dll ref: https://github.com/QuantConnect/alpaca-trade-api-csharp/blob/master/Alpaca.Markets/Alpaca.Markets.csproj-->
 		<PackageReference Include="Polly" Version="8.6.3" />
 		<PackageReference Include="MessagePack" Version="3.1.4" />
 		<PackageReference Include="System.Threading.Channels" Version="9.0.8" PrivateAssets="compile;contentfiles;build;analyzers" />
 		<PackageReference Include="System.IO.Pipelines" Version="9.0.8" PrivateAssets="compile;contentfiles;build;analyzers" />
+		<PackageReference Include="ably.io" Version="1.2.20" />
+	</ItemGroup>
+
+	<!-- Reference local LEAN Brokerages project instead of NuGet package.
+	     This ensures we use our custom-built QuantConnect.Brokerages.dll
+	     with VirtualBrokerageFactory and other custom types.
+	     Path is relative to Docker build context where Lean is at /workspace/Lean -->
+	<ItemGroup>
+		<ProjectReference Include="../../Lean/Brokerages/QuantConnect.Brokerages.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

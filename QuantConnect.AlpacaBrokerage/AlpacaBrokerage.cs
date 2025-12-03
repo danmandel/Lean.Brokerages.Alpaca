@@ -71,6 +71,10 @@ namespace QuantConnect.Brokerages.Alpaca
         private AlpacaStreamingClientWrapper _optionsStreamingClient;
         private AlpacaStreamingClientWrapper _cryptoStreamingClient;
 
+        // Ably-based order updates (alternative to direct Alpaca WebSocket)
+        private AblyOrderUpdateHandler _ablyOrderHandler;
+        private bool _useAblyForOrders;
+
         private bool _isInitialized;
         private bool _connected;
 
@@ -160,16 +164,37 @@ namespace QuantConnect.Brokerages.Alpaca
             var environment = isPaperTrading ? Environments.Paper : Environments.Live;
             // trading api client
             _tradingClient = EnvironmentExtensions.GetAlpacaTradingClient(environment, tradingSecretKey ?? secretKey);
-            // order updates
-            _orderStreamingClient = EnvironmentExtensions.GetAlpacaStreamingClient(environment, tradingSecretKey ?? secretKey);
+            
+            // Check if we should use Ably for order updates instead of direct Alpaca WebSocket
+            var ablyApiKey = Config.Get("ably-api-key", "");
+            var ablyUserId = Config.Get("ably-user-id", "");
+            var projectId = Config.Get("job-project-id", "0");
+            _useAblyForOrders = !string.IsNullOrEmpty(ablyApiKey) && !string.IsNullOrEmpty(ablyUserId);
 
-            // if we are used as a data queue handler ignore order updates
-            if (_orderProvider != null)
-            {
-                _orderStreamingClient.OnTradeUpdate += (message) => _messageHandler.HandleNewMessage(message);
-                WireStreamingClientEvents(_orderStreamingClient);
-            }
             _messageHandler = new(HandleTradeUpdate);
+
+            if (_useAblyForOrders)
+            {
+                // Use Ably for order updates (reduces Alpaca WebSocket connections)
+                Log.Trace("AlpacaBrokerage: Using Ably for order updates");
+                _ablyOrderHandler = new AblyOrderUpdateHandler(
+                    ablyApiKey,
+                    ablyUserId,
+                    projectId,
+                    HandleAblyOrderUpdate);
+            }
+            else
+            {
+                // Use direct Alpaca WebSocket for order updates
+                _orderStreamingClient = EnvironmentExtensions.GetAlpacaStreamingClient(environment, tradingSecretKey ?? secretKey);
+
+                // if we are used as a data queue handler ignore order updates
+                if (_orderProvider != null)
+                {
+                    _orderStreamingClient.OnTradeUpdate += (message) => _messageHandler.HandleNewMessage(message);
+                    WireStreamingClientEvents(_orderStreamingClient);
+                }
+            }
             _symbolMapper = new AlpacaBrokerageSymbolMapper(_tradingClient);
 
             // historical equity
@@ -651,6 +676,66 @@ namespace QuantConnect.Brokerages.Alpaca
         }
 
         /// <summary>
+        /// Handles order updates received from Ably
+        /// </summary>
+        private void HandleAblyOrderUpdate(AblyOrderEvent ablyEvent)
+        {
+            if (_orderProvider == null)
+            {
+                return;
+            }
+
+            var leanOrder = _orderProvider.GetOrdersByBrokerageId(ablyEvent.OrderId)?.SingleOrDefault();
+            if (leanOrder == null)
+            {
+                Log.Error($"AlpacaBrokerage.HandleAblyOrderUpdate(): order id not found: {ablyEvent.OrderId}");
+                return;
+            }
+
+            var newLeanOrderStatus = ablyEvent.ToLeanOrderStatus();
+
+            // Handle fills
+            if (ablyEvent.FilledQuantity > 0)
+            {
+                _orderIdToFillQuantity.TryGetValue(leanOrder.Id, out var previouslyFilledAmount);
+                var direction = ablyEvent.Side == "buy" ? 1 : -1;
+                var accumulativeFilledQuantity = ablyEvent.FilledQuantity * direction;
+                _orderIdToFillQuantity[leanOrder.Id] = accumulativeFilledQuantity;
+
+                if (newLeanOrderStatus.IsClosed())
+                {
+                    _orderIdToFillQuantity.TryRemove(leanOrder.Id, out _);
+                }
+
+                var fee = OrderFee.Zero;
+                if (newLeanOrderStatus == Orders.OrderStatus.Filled)
+                {
+                    var security = _securityProvider?.GetSecurity(leanOrder.Symbol);
+                    if (security != null)
+                    {
+                        fee = security.FeeModel.GetOrderFee(new OrderFeeParameters(security, leanOrder));
+                    }
+                }
+
+                var orderEvent = new OrderEvent(leanOrder, DateTime.UtcNow, fee)
+                {
+                    Status = newLeanOrderStatus,
+                    FillPrice = ablyEvent.FilledPrice ?? 0m,
+                    FillQuantity = accumulativeFilledQuantity - previouslyFilledAmount
+                };
+
+                OnOrderEvent(orderEvent);
+            }
+            else if (newLeanOrderStatus != Orders.OrderStatus.None)
+            {
+                OnOrderEvent(new OrderEvent(leanOrder, DateTime.UtcNow, OrderFee.Zero, $"Ably Order Event")
+                {
+                    Status = newLeanOrderStatus
+                });
+            }
+        }
+
+        /// <summary>
         /// Connects the client to the broker's remote servers
         /// </summary>
         public override void Connect()
@@ -660,8 +745,22 @@ namespace QuantConnect.Brokerages.Alpaca
                 return;
             }
 
-            ConnectAndAuthenticate(_orderStreamingClient);
-            _connected = true;
+            if (_useAblyForOrders)
+            {
+                // Ably connection is handled automatically
+                _connected = _ablyOrderHandler?.IsConnected ?? false;
+                if (!_connected)
+                {
+                    // Wait briefly for Ably to connect
+                    Thread.Sleep(2000);
+                    _connected = _ablyOrderHandler?.IsConnected ?? false;
+                }
+            }
+            else
+            {
+                ConnectAndAuthenticate(_orderStreamingClient);
+                _connected = true;
+            }
         }
 
         /// <summary>
@@ -746,6 +845,7 @@ namespace QuantConnect.Brokerages.Alpaca
             _equityStreamingClient?.DisconnectAsync()?.SynchronouslyAwaitTask();
             _cryptoStreamingClient?.DisconnectAsync()?.SynchronouslyAwaitTask();
             _optionsStreamingClient?.DisconnectAsync()?.SynchronouslyAwaitTask();
+            _ablyOrderHandler?.Dispose();
         }
 
         public override void Dispose()
@@ -764,6 +864,9 @@ namespace QuantConnect.Brokerages.Alpaca
             _equityStreamingClient.DisposeSafely();
             _cryptoStreamingClient.DisposeSafely();
             _optionsStreamingClient.DisposeSafely();
+            
+            // Ably order handler
+            _ablyOrderHandler?.Dispose();
         }
 
         /// <summary>
