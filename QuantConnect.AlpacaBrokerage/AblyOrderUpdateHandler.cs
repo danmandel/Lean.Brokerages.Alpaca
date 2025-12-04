@@ -114,13 +114,18 @@ namespace QuantConnect.Brokerages.Alpaca
 
         private void ProcessOrderMessage(Message message)
         {
+            Log.Trace($"AblyOrderUpdateHandler: Raw message received - {message.Data}");
+
             var orderEvent = JsonConvert.DeserializeObject<AblyOrderEvent>(message.Data.ToString());
             if (orderEvent == null)
             {
+                Log.Error("AblyOrderUpdateHandler: Failed to deserialize order event");
                 return;
             }
 
-            Log.Trace($"AblyOrderUpdateHandler: Received order update - {orderEvent.Event} for {orderEvent.Symbol}");
+            Log.Trace($"AblyOrderUpdateHandler: Processing order event - {orderEvent.Event} for {orderEvent.Symbol}, " +
+                      $"status={orderEvent.Status}, filled={orderEvent.FilledQuantity}, price={orderEvent.FilledPrice}, " +
+                      $"orderId={orderEvent.OrderId}");
             _onOrderUpdate?.Invoke(orderEvent);
         }
 

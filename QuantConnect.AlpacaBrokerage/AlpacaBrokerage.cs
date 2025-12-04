@@ -680,8 +680,13 @@ namespace QuantConnect.Brokerages.Alpaca
         /// </summary>
         private void HandleAblyOrderUpdate(AblyOrderEvent ablyEvent)
         {
+            Log.Trace($"AlpacaBrokerage.HandleAblyOrderUpdate(): Received event={ablyEvent.Event}, " +
+                      $"orderId={ablyEvent.OrderId}, status={ablyEvent.Status}, " +
+                      $"filled={ablyEvent.FilledQuantity}, price={ablyEvent.FilledPrice}");
+
             if (_orderProvider == null)
             {
+                Log.Error("AlpacaBrokerage.HandleAblyOrderUpdate(): _orderProvider is null");
                 return;
             }
 
@@ -691,6 +696,8 @@ namespace QuantConnect.Brokerages.Alpaca
                 Log.Error($"AlpacaBrokerage.HandleAblyOrderUpdate(): order id not found: {ablyEvent.OrderId}");
                 return;
             }
+
+            Log.Trace($"AlpacaBrokerage.HandleAblyOrderUpdate(): Found LEAN order {leanOrder.Id} for brokerage order {ablyEvent.OrderId}");
 
             var newLeanOrderStatus = ablyEvent.ToLeanOrderStatus();
 
@@ -724,14 +731,23 @@ namespace QuantConnect.Brokerages.Alpaca
                     FillQuantity = accumulativeFilledQuantity - previouslyFilledAmount
                 };
 
+                Log.Trace($"AlpacaBrokerage.HandleAblyOrderUpdate(): Emitting fill event - " +
+                          $"status={newLeanOrderStatus}, fillQty={orderEvent.FillQuantity}, fillPrice={orderEvent.FillPrice}");
+
                 OnOrderEvent(orderEvent);
             }
             else if (newLeanOrderStatus != Orders.OrderStatus.None)
             {
+                Log.Trace($"AlpacaBrokerage.HandleAblyOrderUpdate(): Emitting status-only event - status={newLeanOrderStatus}");
+
                 OnOrderEvent(new OrderEvent(leanOrder, DateTime.UtcNow, OrderFee.Zero, $"Ably Order Event")
                 {
                     Status = newLeanOrderStatus
                 });
+            }
+            else
+            {
+                Log.Trace($"AlpacaBrokerage.HandleAblyOrderUpdate(): No event emitted - status={newLeanOrderStatus}, filled={ablyEvent.FilledQuantity}");
             }
         }
 
